@@ -1,5 +1,5 @@
 #!/bin/bash
-# Simple Video Streamer
+# Simple Video Streamer with Robust Hardware Detection
 # Streams video to localhost or remote IP
 
 PORT=5004
@@ -40,34 +40,89 @@ SOURCE_CHOICE=${SOURCE_CHOICE:-3}
 
 echo ""
 
-# Detect best encoder
-echo "Detecting encoder..."
+# Comprehensive encoder detection with priority order
+echo "Detecting hardware encoders..."
+ENCODER_TYPE=""
+
+# Priority 1: NVIDIA (best performance on NVIDIA GPUs)
 if gst-inspect-1.0 nvh264enc > /dev/null 2>&1; then
-    ENCODER_TYPE="nvidia"
-    echo "Using: NVIDIA hardware encoder"
-elif gst-inspect-1.0 vaapih264enc > /dev/null 2>&1; then
-    ENCODER_TYPE="vaapi"
-    echo "Using: VA-API hardware encoder"
-else
+    echo "  Testing NVIDIA encoder..."
+    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! video/x-raw,format=I420 ! nvh264enc ! fakesink 2>/dev/null; then
+        ENCODER_TYPE="nvidia"
+        echo "  [✓] NVIDIA hardware available"
+    else
+        echo "  [✗] NVIDIA plugin exists but no hardware"
+    fi
+fi
+
+# Priority 2: Intel QuickSync (good for Intel GPUs)
+if [ -z "$ENCODER_TYPE" ] && gst-inspect-1.0 qsvh264enc > /dev/null 2>&1; then
+    echo "  Testing QuickSync encoder..."
+    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! video/x-raw,format=NV12 ! qsvh264enc ! fakesink 2>/dev/null; then
+        ENCODER_TYPE="quicksync"
+        echo "  [✓] QuickSync hardware available"
+    else
+        echo "  [✗] QuickSync plugin exists but no hardware"
+    fi
+fi
+
+# Priority 3: VA-API (works on Intel/AMD integrated graphics)
+if [ -z "$ENCODER_TYPE" ] && gst-inspect-1.0 vaapih264enc > /dev/null 2>&1; then
+    echo "  Testing VA-API encoder..."
+    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! video/x-raw,format=NV12 ! vaapih264enc ! fakesink 2>/dev/null; then
+        ENCODER_TYPE="vaapi"
+        echo "  [✓] VA-API hardware available"
+    else
+        echo "  [✗] VA-API plugin exists but no hardware"
+    fi
+fi
+
+# Priority 4: Software fallback (always works)
+if [ -z "$ENCODER_TYPE" ]; then
     ENCODER_TYPE="software"
-    echo "Using: x264 software encoder"
+    echo "  [✓] Software encoder (CPU)"
 fi
 
 echo ""
+case "$ENCODER_TYPE" in
+    nvidia)
+        echo "Using: NVIDIA hardware encoder"
+        ;;
+    quicksync)
+        echo "Using: Intel QuickSync hardware encoder"
+        ;;
+    vaapi)
+        echo "Using: VA-API hardware encoder"
+        ;;
+    software)
+        echo "Using: x264 software encoder (CPU)"
+        ;;
+esac
 
-# Function to build encoder pipeline
+echo ""
+
+# Function to build encoder pipeline based on detected hardware
 build_encoder_pipeline() {
-    if [ "$ENCODER_TYPE" = "nvidia" ]; then
-        echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=3000"
-    elif [ "$ENCODER_TYPE" = "vaapi" ]; then
-        if gst-inspect-1.0 vaapipostproc > /dev/null 2>&1; then
-            echo "vaapipostproc ! vaapih264enc rate-control=cbr bitrate=3000"
-        else
-            echo "videoconvert ! vaapih264enc rate-control=cbr bitrate=3000"
-        fi
-    else
-        echo "videoconvert ! x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast"
-    fi
+    case "$ENCODER_TYPE" in
+        nvidia)
+            echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=3000"
+            ;;
+        quicksync)
+            echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=3000"
+            ;;
+        vaapi)
+            # Force constrained-baseline profile for maximum compatibility across decoders
+            if gst-inspect-1.0 vaapipostproc > /dev/null 2>&1; then
+                echo "videoconvert ! video/x-raw,format=NV12 ! vaapipostproc ! vaapih264enc rate-control=cbr bitrate=3000 ! video/x-h264,profile=constrained-baseline"
+            else
+                echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc rate-control=cbr bitrate=3000 ! video/x-h264,profile=constrained-baseline"
+            fi
+            ;;
+        software)
+            # Force I420 format for baseline/main profile compatibility
+            echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast"
+            ;;
+    esac
 }
 
 ENCODER_PIPELINE=$(build_encoder_pipeline)
@@ -124,13 +179,38 @@ if [ "$SOURCE_CHOICE" -eq 1 ]; then
     echo "Press Ctrl+C to stop"
     echo ""
     
+    # Try with detected encoder
     gst-launch-1.0 -v \
         v4l2src device="$CAMERA" ! \
         "video/x-raw,width=$CAM_WIDTH,height=$CAM_HEIGHT,framerate=30/1" ! \
         $ENCODER_PIPELINE ! \
         h264parse ! \
         rtph264pay config-interval=1 pt=96 ! \
-        udpsink host="$DEST_IP" port=$PORT
+        udpsink host="$DEST_IP" port=$PORT 2>&1 | tee /tmp/stream_error.log &
+    
+    STREAM_PID=$!
+    
+    # Monitor for failures
+    sleep 3
+    if ! kill -0 $STREAM_PID 2>/dev/null; then
+        echo ""
+        echo "Hardware encoder failed. Trying software encoder..."
+        echo ""
+        
+        # Fallback to software encoder with I420 format
+        gst-launch-1.0 -v \
+            v4l2src device="$CAMERA" ! \
+            "video/x-raw,width=$CAM_WIDTH,height=$CAM_HEIGHT,framerate=30/1" ! \
+            videoconvert ! \
+            "video/x-raw,format=I420" ! \
+            x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast ! \
+            h264parse ! \
+            rtph264pay config-interval=1 pt=96 ! \
+            udpsink host="$DEST_IP" port=$PORT
+    else
+        # Pipeline is running, wait for it
+        wait $STREAM_PID
+    fi
 
 elif [ "$SOURCE_CHOICE" -eq 2 ]; then
     # Video file
@@ -158,11 +238,36 @@ else
     echo "Press Ctrl+C to stop"
     echo ""
     
+    # Try with detected encoder
     gst-launch-1.0 -v \
         videotestsrc pattern=smpte is-live=true ! \
         "video/x-raw,width=1280,height=720,framerate=30/1" ! \
         $ENCODER_PIPELINE ! \
         h264parse ! \
         rtph264pay config-interval=1 pt=96 ! \
-        udpsink host="$DEST_IP" port=$PORT
+        udpsink host="$DEST_IP" port=$PORT 2>&1 | tee /tmp/stream_error.log &
+    
+    STREAM_PID=$!
+    
+    # Monitor for failures
+    sleep 3
+    if ! kill -0 $STREAM_PID 2>/dev/null; then
+        echo ""
+        echo "Hardware encoder failed. Trying software encoder..."
+        echo ""
+        
+        # Fallback to software encoder with I420 format
+        gst-launch-1.0 -v \
+            videotestsrc pattern=smpte is-live=true ! \
+            "video/x-raw,width=1280,height=720,framerate=30/1" ! \
+            videoconvert ! \
+            "video/x-raw,format=I420" ! \
+            x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast ! \
+            h264parse ! \
+            rtph264pay config-interval=1 pt=96 ! \
+            udpsink host="$DEST_IP" port=$PORT
+    else
+        # Pipeline is running, wait for it
+        wait $STREAM_PID
+    fi
 fi

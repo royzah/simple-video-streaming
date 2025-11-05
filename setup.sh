@@ -20,7 +20,7 @@ fi
 
 . /etc/os-release
 
-if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
+if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ] && [ "$ID" != "kali" ]; then
     echo "ERROR: This script is for Ubuntu/Debian only"
     exit 1
 fi

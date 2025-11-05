@@ -68,10 +68,40 @@ Choose camera [1] or test pattern [3]
 
 ## Supported Encoders
 
-The scripts automatically detect and use:
-1. **NVIDIA** (nvh264enc) - if you have NVIDIA GPU
-2. **VA-API** (vaapih264enc) - if you have Intel/AMD GPU
-3. **Software** (x264enc) - always works, uses CPU
+The scripts use **intelligent hardware detection** with priority order:
+
+### Encoder Priority (stream.sh)
+1. **NVIDIA** (nvh264enc) - Best for NVIDIA GPUs
+2. **QuickSync** (qsvh264enc) - Intel CPUs with iGPU
+3. **VA-API** (vaapih264enc) - Intel/AMD integrated graphics
+4. **Software** (x264enc) - CPU encoding (always works)
+
+### Decoder Priority (view.sh)
+1. **NVIDIA** (nvh264dec) - Best for NVIDIA GPUs
+2. **QuickSync** (qsvh264dec) - Intel CPUs with iGPU
+3. **VA-API** (vaapih264dec) - Intel/AMD integrated graphics
+4. **Software** (avdec_h264) - CPU decoding (always works)
+
+**How Detection Works:**
+1. Checks if plugin exists
+2. **Tests if hardware actually works** (not just installed)
+3. Uses first hardware that passes both checks
+4. Falls back to next option if hardware fails
+
+**What You'll See:**
+```
+Detecting hardware encoders...
+  Testing NVIDIA encoder...
+  [✗] NVIDIA plugin exists but no hardware
+  Testing VA-API encoder...
+  [✓] VA-API hardware available
+
+Using: VA-API hardware encoder
+```
+
+**Automatic Fallback:** If hardware encoding/decoding fails during streaming, automatically falls back to software.
+
+See **[HARDWARE_DETECTION.md](./HARDWARE_DETECTION.md)** for detailed explanation.
 
 ## Troubleshooting
 
