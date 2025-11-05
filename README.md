@@ -1,6 +1,6 @@
-# START HERE - Bulletproof Video Streaming
+# Video Streaming
 
-**Works on ANY laptop**. NVIDIA, Intel, AMD, or no GPU. Automatically adapts.
+**Should on ANY laptop**. NVIDIA, Intel, AMD, or no GPU. Automatically adapts.
 
 ## Files
 
