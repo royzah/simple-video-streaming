@@ -3,21 +3,25 @@
 `stream.sh` picks the best working encoder; `view.sh` lets `decodebin` pick the
 decoder. Any encoder interoperates with any decoder.
 
+Codec is selected with `CODEC=h264` (default) or `CODEC=h265`; both ends must
+match. Everything below applies to both codecs (element names swap 264 for 265).
+
 ## How it works
 
 `stream.sh` (encoder):
 
-1. Walks a priority list: NVIDIA, VA, QuickSync, VA-API, software.
+1. Walks a priority list: NVIDIA desktop, Jetson (`nvv4l2`), VA, QuickSync,
+   VA-API, ARM V4L2, software.
 2. Tests that the encoder actually works, not just that the plugin is present.
-3. Uses the first that works, producing widely compatible H.264.
-4. Falls back to software (x264enc) if the hardware path fails at runtime.
+3. Uses the first that works.
+4. Falls back to software (`x264enc`/`x265enc`) if the hardware path fails.
 
 `view.sh` (decoder):
 
-1. Receives the RTP/UDP stream and hands the H.264 to `decodebin`.
+1. Receives the RTP/UDP stream and hands the elementary stream to `decodebin`.
 2. `decodebin` auto-plugs the highest-ranked decoder for the hardware.
 3. On a hardware decode failure (for example an unsupported profile) it retries
-   the next candidate on its own, down to software (`avdec_h264`).
+   the next candidate on its own, down to software.
 
 ## Encoder/decoder matrix
 
@@ -36,26 +40,33 @@ The NVIDIA encoder can emit profiles (for example high-4:4:4) that some
 hardware decoders reject; `decodebin` then falls back to software decode. Video
 still plays, with slightly higher CPU on the viewer.
 
-## Encoder output
+## Encoders by platform
 
-| Encoder      | Format | Profile              | Notes                    |
-| ------------ | ------ | -------------------- | ------------------------ |
-| nvh264enc    | I420   | variable             | may need software decode |
-| vah264enc    | NV12   | main/high            | modern VA plugin         |
-| qsvh264enc   | NV12   | main/high            | all hardware decoders    |
-| vaapih264enc | NV12   | constrained-baseline | forced for compatibility |
-| x264enc      | I420   | main/high            | all decoders             |
+Element names shown for H.264; H.265 swaps `264` for `265` (for example
+`nvh265enc`, `nvv4l2h265enc`, `x265enc`).
+
+| Encoder       | Platform             | Notes                |
+| ------------- | -------------------- | -------------------- |
+| nvh264enc     | NVIDIA desktop       | bitrate kbps         |
+| nvv4l2h264enc | NVIDIA Jetson / Orin | NVMM, bitrate b/s    |
+| vah264enc     | Intel/AMD (VA)       | preferred over vaapi |
+| qsvh264enc    | Intel QuickSync      |                      |
+| vaapih264enc  | Intel/AMD (legacy)   |                      |
+| v4l2h264enc   | ARM (Pi/i.MX/QCom)   | driver bitrate       |
+| x264enc       | any CPU (software)   | always available     |
 
 ## Decoder support
 
 `decodebin` chooses among whatever is installed:
 
-| Decoder      | Profiles handled     | Notes                    |
-| ------------ | -------------------- | ------------------------ |
-| nvh264dec    | most                 | may reject some profiles |
-| vah264dec    | most                 | modern VA plugin         |
-| vaapih264dec | baseline, main, high | rejects high-4:4:4       |
-| avdec_h264   | all                  | software, always works   |
+| Decoder                 | Platform             | Notes               |
+| ----------------------- | -------------------- | ------------------- |
+| nvh264dec               | NVIDIA desktop       | may reject profiles |
+| nvv4l2decoder           | NVIDIA Jetson / Orin | NVMM output         |
+| vah264dec               | Intel/AMD (VA)       |                     |
+| vaapih264dec            | Intel/AMD (legacy)   | rejects high-4:4:4  |
+| v4l2\*dec / v4l2sl\*dec | ARM (Pi/i.MX/QCom)   |                     |
+| avdec_h264              | any CPU (software)   | always works        |
 
 ## Fallback order
 

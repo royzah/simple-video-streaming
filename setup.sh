@@ -21,10 +21,15 @@ fi
 # shellcheck disable=SC1091
 . /etc/os-release
 
-if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
-    echo "ERROR: This script is for Ubuntu/Debian only"
-    exit 1
-fi
+# Accept Debian/Ubuntu and their derivatives (Raspberry Pi OS, Jetson L4T, ...).
+case " $ID ${ID_LIKE:-} " in
+    *" ubuntu "* | *" debian "* | *" raspbian "*) ;;
+    *)
+        echo "ERROR: apt-based Debian/Ubuntu systems only (incl. Raspberry Pi OS, Jetson L4T)."
+        echo "On Yocto/BSP boards (i.MX, Qualcomm) install GStreamer via your BSP instead."
+        exit 1
+        ;;
+esac
 
 echo "Detected: $PRETTY_NAME"
 echo ""
@@ -37,7 +42,8 @@ echo ""
 echo "Step 2: Installing GStreamer..."
 echo ""
 
-# Install GStreamer packages
+# Core packages (present on x86 and ARM). plugins-good/bad carry the V4L2 codec
+# elements used by Raspberry Pi, i.MX, Qualcomm and Rockchip boards.
 apt-get install -y \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
@@ -46,8 +52,10 @@ apt-get install -y \
     gstreamer1.0-plugins-ugly \
     gstreamer1.0-libav \
     gstreamer1.0-x \
-    gstreamer1.0-vaapi \
     v4l-utils
+
+# VA-API (Intel/AMD) is best-effort - it is not present on ARM boards.
+apt-get install -y gstreamer1.0-vaapi || echo "  (skipped gstreamer1.0-vaapi - not available here)"
 
 echo ""
 echo "Step 3: Checking firewall..."
@@ -84,15 +92,12 @@ fi
 # Check encoders
 echo ""
 echo "Available encoders:"
-if gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
-    echo "  - NVIDIA hardware"
-fi
-if gst-inspect-1.0 qsvh264enc >/dev/null 2>&1; then
-    echo "  - QuickSync hardware"
-fi
-if gst-inspect-1.0 vaapih264enc >/dev/null 2>&1; then
-    echo "  - VA-API hardware"
-fi
+gst-inspect-1.0 nvh264enc >/dev/null 2>&1 && echo "  - NVIDIA desktop (NVENC)"
+gst-inspect-1.0 nvv4l2h264enc >/dev/null 2>&1 && echo "  - NVIDIA Jetson (nvv4l2)"
+gst-inspect-1.0 vah264enc >/dev/null 2>&1 && echo "  - VA (modern VA-API)"
+gst-inspect-1.0 qsvh264enc >/dev/null 2>&1 && echo "  - QuickSync"
+gst-inspect-1.0 vaapih264enc >/dev/null 2>&1 && echo "  - VA-API (legacy)"
+gst-inspect-1.0 v4l2h264enc >/dev/null 2>&1 && echo "  - V4L2 (Pi/i.MX/Qualcomm/Rockchip)"
 echo "  - x264 software (always available)"
 
 # Check cameras

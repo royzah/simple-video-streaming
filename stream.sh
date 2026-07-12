@@ -1,11 +1,27 @@
 #!/bin/bash
 # Bulletproof Video Streamer - Works on ANY laptop
-# Auto-selects NVIDIA, VA, QuickSync, VA-API, or software H.264 encoding
+# Auto-selects NVIDIA, VA, QuickSync, VA-API, or software encoding.
+# CODEC=h264 (default) or CODEC=h265 - the viewer must use the same CODEC.
 
 PORT=${PORT:-5004}
 BITRATE=${BITRATE:-3000}
+CODEC=${CODEC:-h264}
+
+case "$CODEC" in
+    h264) HNUM=264 ;;
+    h265) HNUM=265 ;;
+    *)
+        echo "ERROR: CODEC must be h264 or h265 (got '$CODEC')"
+        exit 1
+        ;;
+esac
+
+# Codec-dependent RTP pieces (H264/H265 share clock-rate and payload type 96).
+PARSE="h${HNUM}parse"
+PAY="rtph${HNUM}pay config-interval=1 pt=96"
 
 echo "=== Video Streamer ==="
+echo "Codec: $CODEC"
 echo ""
 
 # Ask for destination IP
@@ -41,53 +57,70 @@ SOURCE_CHOICE=${SOURCE_CHOICE:-3}
 
 echo ""
 
-# Encoder candidates in priority order: "type|element|test-format".
-# va is the modern VA-API plugin (preferred over legacy vaapi); the viewer's
-# decodebin decodes whatever we send, so any of these interoperates.
-ENCODERS=(
-    "nvidia|nvh264enc|I420"
-    "va|vah264enc|NV12"
-    "quicksync|qsvh264enc|NV12"
-    "vaapi|vaapih264enc|NV12"
-)
+# Encoder candidates in priority order. The element name is derived from the
+# type and $CODEC (see encoder_element). decodebin on the viewer decodes
+# whatever we send, so any of these interoperates.
+#   Desktop x86:  nvidia va quicksync vaapi
+#   Embedded ARM: nvv4l2 (Jetson/Orin), v4l2 (Raspberry Pi, i.MX, Qualcomm, Rockchip)
+ENCODERS=(nvidia nvv4l2 va quicksync vaapi v4l2)
 
-# Production pipeline fragment for an encoder type (all emit compatible H.264).
+# gst element for an encoder type at the selected codec (h264 -> 264, h265 -> 265).
+encoder_element() {
+    case "$1" in
+        nvidia) echo "nvh${HNUM}enc" ;;
+        nvv4l2) echo "nvv4l2h${HNUM}enc" ;;
+        va) echo "vah${HNUM}enc" ;;
+        quicksync) echo "qsvh${HNUM}enc" ;;
+        vaapi) echo "vaapih${HNUM}enc" ;;
+        v4l2) echo "v4l2h${HNUM}enc" ;;
+        *) echo "x${HNUM}enc" ;;
+    esac
+}
+
+# Production pipeline fragment for an encoder type.
 encoder_pipeline() {
+    local elem
+    elem=$(encoder_element "$1")
     case "$1" in
         nvidia)
-            echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=$BITRATE"
+            echo "videoconvert ! video/x-raw,format=I420 ! $elem preset=low-latency-hq bitrate=$BITRATE"
             ;;
-        va)
-            echo "videoconvert ! video/x-raw,format=NV12 ! vah264enc bitrate=$BITRATE"
+        nvv4l2)
+            # Jetson/Orin: encoder needs NVMM buffers via nvvidconv; bitrate is bits/sec.
+            echo "nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! $elem insert-sps-pps=1 maxperf-enable=1 bitrate=$((BITRATE * 1000))"
             ;;
-        quicksync)
-            echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=$BITRATE"
+        va | quicksync | vaapi)
+            echo "videoconvert ! video/x-raw,format=NV12 ! $elem bitrate=$BITRATE"
             ;;
-        vaapi)
-            echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate=$BITRATE"
+        v4l2)
+            # Generic ARM V4L2 M2M (Pi, i.MX, Qualcomm Venus, Rockchip).
+            # Bitrate is driver-controlled; the board default is used.
+            echo "videoconvert ! video/x-raw,format=I420 ! $elem"
             ;;
         *)
             # Software floor - always available, universally compatible
-            echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
+            echo "videoconvert ! video/x-raw,format=I420 ! $elem tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
             ;;
     esac
 }
 
 # Pick the first candidate that is installed AND actually encodes on this box.
 detect_encoder() {
-    local entry etype elem fmt
-    for entry in "${ENCODERS[@]}"; do
-        IFS='|' read -r etype elem fmt <<<"$entry"
+    local etype elem
+    for etype in "${ENCODERS[@]}"; do
+        elem=$(encoder_element "$etype")
         gst-inspect-1.0 "$elem" >/dev/null 2>&1 || continue
         echo "  Testing $etype ($elem)..." >&2
-        # 5s budget: hardware encoders can take ~2s to cold-init the GPU
-        if timeout 5 gst-launch-1.0 videotestsrc num-buffers=10 ! videoconvert ! \
-            "video/x-raw,format=$fmt" ! "$elem" ! fakesink >/dev/null 2>&1; then
+        # 5s budget: hardware encoders can take ~2s to cold-init the GPU.
+        # Intentional word-splitting of the pipeline fragment.
+        # shellcheck disable=SC2046,SC2086
+        if timeout 5 gst-launch-1.0 videotestsrc num-buffers=10 ! \
+            $(encoder_pipeline "$etype") ! fakesink >/dev/null 2>&1; then
             echo "  [OK] $etype available" >&2
             echo "$etype"
             return
         fi
-        echo "  [--] $etype present but no working hardware" >&2
+        echo "  [--] $etype present but not usable" >&2
     done
     echo "  [OK] software (CPU)" >&2
     echo "software"
@@ -158,8 +191,8 @@ if [ "$SOURCE_CHOICE" -eq 1 ]; then
         v4l2src device="$CAMERA" ! \
         "video/x-raw,width=$CAM_WIDTH,height=$CAM_HEIGHT,framerate=30/1" ! \
         $ENCODER_PIPELINE ! \
-        h264parse ! \
-        rtph264pay config-interval=1 pt=96 ! \
+        $PARSE ! \
+        $PAY ! \
         udpsink host="$DEST_IP" port=$PORT 2>&1 | tee /tmp/stream_error.log &
 
     STREAM_PID=$!
@@ -179,8 +212,8 @@ if [ "$SOURCE_CHOICE" -eq 1 ]; then
             v4l2src device="$CAMERA" ! \
             "video/x-raw,width=$CAM_WIDTH,height=$CAM_HEIGHT,framerate=30/1" ! \
             $ENCODER_PIPELINE ! \
-            h264parse ! \
-            rtph264pay config-interval=1 pt=96 ! \
+            $PARSE ! \
+            $PAY ! \
             udpsink host="$DEST_IP" port=$PORT
     else
         wait $STREAM_PID
@@ -199,7 +232,7 @@ elif [ "$SOURCE_CHOICE" -eq 2 ]; then
     echo "Press Ctrl+C to stop"
     echo ""
 
-    # decodebin handles any container/codec; then re-encode to compatible H.264
+    # decodebin handles any container/codec; then re-encode to the chosen codec
     ENCODER_PIPELINE=$(encoder_pipeline "$ENCODER_TYPE")
 
     # shellcheck disable=SC2086
@@ -207,8 +240,8 @@ elif [ "$SOURCE_CHOICE" -eq 2 ]; then
         filesrc location="$VIDEO_FILE" ! \
         decodebin ! \
         $ENCODER_PIPELINE ! \
-        h264parse ! \
-        rtph264pay config-interval=1 pt=96 ! \
+        $PARSE ! \
+        $PAY ! \
         udpsink host="$DEST_IP" port=$PORT
 
 else
@@ -225,8 +258,8 @@ else
         videotestsrc pattern=smpte is-live=true ! \
         "video/x-raw,width=1280,height=720,framerate=30/1" ! \
         $ENCODER_PIPELINE ! \
-        h264parse ! \
-        rtph264pay config-interval=1 pt=96 ! \
+        $PARSE ! \
+        $PAY ! \
         udpsink host="$DEST_IP" port=$PORT 2>&1 | tee /tmp/stream_error.log &
 
     STREAM_PID=$!
@@ -246,8 +279,8 @@ else
             videotestsrc pattern=smpte is-live=true ! \
             "video/x-raw,width=1280,height=720,framerate=30/1" ! \
             $ENCODER_PIPELINE ! \
-            h264parse ! \
-            rtph264pay config-interval=1 pt=96 ! \
+            $PARSE ! \
+            $PAY ! \
             udpsink host="$DEST_IP" port=$PORT
     else
         wait $STREAM_PID
