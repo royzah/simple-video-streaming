@@ -6,7 +6,7 @@ echo "=== Video Streaming Setup ==="
 echo ""
 
 # Check for root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
     echo "Please run with sudo:"
     echo "  sudo bash setup.sh"
     exit 1
@@ -18,6 +18,7 @@ if [ ! -f /etc/os-release ]; then
     exit 1
 fi
 
+# shellcheck disable=SC1091
 . /etc/os-release
 
 if [ "$ID" != "ubuntu" ] && [ "$ID" != "debian" ]; then
@@ -53,7 +54,7 @@ echo "Step 3: Checking firewall..."
 echo ""
 
 # Configure firewall if present
-if command -v ufw > /dev/null 2>&1; then
+if command -v ufw >/dev/null 2>&1; then
     if ufw status | grep -q "Status: active"; then
         echo "UFW is active. Adding rule for port 5004/udp..."
         ufw allow 5004/udp
@@ -72,7 +73,7 @@ echo "Step 4: Verifying installation..."
 echo ""
 
 # Verify GStreamer
-if gst-launch-1.0 --version > /dev/null 2>&1; then
+if gst-launch-1.0 --version >/dev/null 2>&1; then
     echo "GStreamer: OK"
     gst-launch-1.0 --version | head -n 1
 else
@@ -83,10 +84,10 @@ fi
 # Check encoders
 echo ""
 echo "Available encoders:"
-if gst-inspect-1.0 nvh264enc > /dev/null 2>&1; then
+if gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
     echo "  - NVIDIA hardware"
 fi
-if gst-inspect-1.0 vaapih264enc > /dev/null 2>&1; then
+if gst-inspect-1.0 vaapih264enc >/dev/null 2>&1; then
     echo "  - VA-API hardware"
 fi
 echo "  - x264 software (always available)"
@@ -94,7 +95,7 @@ echo "  - x264 software (always available)"
 # Check cameras
 echo ""
 echo "Cameras detected:"
-if ls /dev/video* > /dev/null 2>&1; then
+if ls /dev/video* >/dev/null 2>&1; then
     ls /dev/video*
 else
     echo "  None (you can still use test pattern)"

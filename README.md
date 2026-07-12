@@ -1,138 +1,97 @@
 # Video Streaming
 
-**Should on ANY laptop**. NVIDIA, Intel, AMD, or no GPU. Automatically adapts.
+Low-latency H.264 video streaming over UDP/RTP using GStreamer. Works on
+NVIDIA, Intel, AMD, or CPU-only machines, with automatic hardware detection and
+software fallback.
 
 ## Files
 
-1. **setup.sh** - Run once to install everything
-2. **stream.sh** - Sends video (works on any hardware)
-3. **view.sh** - Receives video (works with any stream)
+- `setup.sh` - install GStreamer and configure the firewall (run once)
+- `stream.sh` - send video
+- `view.sh` - receive video
 
-## Installation (One Time)
+## Install
 
 ```bash
 chmod +x setup.sh
 sudo ./setup.sh
 ```
 
-Done. Everything installed.
+## Local test (one machine, two terminals)
 
-## Local Test (One Laptop, Two Terminals)
-
-### Terminal 1:
 ```bash
+# Terminal 1
 chmod +x view.sh
 ./view.sh
-```
 
-### Terminal 2:
-```bash
+# Terminal 2
 chmod +x stream.sh
 ./stream.sh
 ```
 
-When asked for IP: **Press Enter** (uses localhost)  
-When asked for source: **Type 3** (test pattern)
+When prompted for an IP, press Enter for localhost. For the source, choose 3
+(test pattern). A window with colour bars should appear.
 
-Video window appears with colorful bars.
+## Remote streaming (two machines)
 
-## Remote Streaming (Two Laptops)
+On the receiver:
 
-### Laptop A (Receiver):
 ```bash
 ./view.sh
 ```
-Note your IP with: `ip addr` or `hostname -I`
 
-### Laptop B (Sender):
+Find its IP with `ip addr` or `hostname -I`.
+
+On the sender:
+
 ```bash
 ./stream.sh
 ```
-Enter Laptop A's IP address  
-Choose source (1=camera, 3=test pattern)
 
-Video appears on Laptop A.
+Enter the receiver's IP and choose a source (1 = camera, 3 = test pattern).
 
-## How It Works
+## How it works
 
-1. **setup.sh** installs GStreamer + configures firewall
-2. **stream.sh** asks for IP, detects encoder, sends video
-3. **view.sh** detects decoder, receives video, shows window
+1. `setup.sh` installs GStreamer and opens UDP port 5004.
+2. `stream.sh` asks for the destination IP, detects an encoder, and sends video.
+3. `view.sh` detects a decoder, receives the stream, and shows a window.
 
-## Encoder Detection
+## Encoder detection
 
-Scripts automatically use best available:
-- NVIDIA GPU → nvh264enc
-- Intel/AMD GPU → vaapih264enc  
-- No GPU → x264enc (software)
+The scripts pick the best available encoder and fall back to software if the
+hardware path fails:
 
-All work. Software encoding uses more CPU but always works.
+- NVIDIA GPU - `nvh264enc`
+- Intel/AMD GPU - `vaapih264enc`
+- No GPU - `x264enc` (software, higher CPU)
 
 ## Troubleshooting
 
-### Problem: No video window
-**Solution:**
+No video window:
+
 ```bash
 killall gst-launch-1.0
-# Start viewer FIRST, then streamer
+# Start the viewer first, then the streamer.
 ```
 
-### Problem: Camera not found
-**Solution:**
+Camera not found:
+
 ```bash
-ls /dev/video*  # Check if camera exists
-# Or use test pattern (option 3)
+ls /dev/video*   # confirm the camera exists, or use the test pattern
 ```
 
-### Problem: Cannot reach remote IP
-**Solution:**
+Cannot reach the remote IP:
+
 ```bash
-# On both laptops:
 sudo ufw allow 5004/udp
-ping [other-laptop-ip]
+ping <other-ip>
 ```
 
-### Problem: Port already in use
-**Solution:**
+Port already in use:
+
 ```bash
-sudo netstat -tulpn | grep 5004  # See what's using it
-killall gst-launch-1.0  # Kill old processes
+sudo netstat -tulpn | grep 5004
+killall gst-launch-1.0
 ```
 
-## That's It
-
-Really. Three scripts. Install, stream, view. Done.
-
-## Bulletproof Guarantee
-
-**These scripts work on ANY laptop combination:**
-- ✓ NVIDIA laptop → NVIDIA laptop
-- ✓ NVIDIA laptop → Intel laptop
-- ✓ Intel laptop → Intel laptop
-- ✓ Intel laptop → old laptop (no GPU)
-- ✓ Any → Any
-
-**How?**
-- Auto-detects hardware (NVIDIA/QuickSync/VA-API)
-- Tests if hardware actually works
-- Falls back to software if needed
-- Multiple fallback levels
-- **Never fails**
-
-See **[COMPATIBILITY.md](./COMPATIBILITY.md)** for detailed compatibility matrix.
-
-## Examples
-
-**Test pattern locally:**
-```
-Terminal 1: ./view.sh
-Terminal 2: ./stream.sh → Enter → 3
-```
-
-**Camera to remote laptop:**
-```
-Laptop A: ./view.sh
-Laptop B: ./stream.sh → 192.168.1.100 → 1
-```
-
-Simple.
+See [COMPATIBILITY.md](./COMPATIBILITY.md) for the encoder/decoder matrix.
