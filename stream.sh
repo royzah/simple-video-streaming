@@ -1,6 +1,6 @@
 #!/bin/bash
 # Bulletproof Video Streamer - Works on ANY laptop
-# Automatically adapts to NVIDIA, VA-API, QuickSync, or software encoding
+# Auto-selects NVIDIA, VA, QuickSync, VA-API, or software H.264 encoding
 
 PORT=${PORT:-5004}
 BITRATE=${BITRATE:-3000}
@@ -41,88 +41,63 @@ SOURCE_CHOICE=${SOURCE_CHOICE:-3}
 
 echo ""
 
-# Detect best encoder with actual hardware testing
+# Encoder candidates in priority order: "type|element|test-format".
+# va is the modern VA-API plugin (preferred over legacy vaapi); the viewer's
+# decodebin decodes whatever we send, so any of these interoperates.
+ENCODERS=(
+    "nvidia|nvh264enc|I420"
+    "va|vah264enc|NV12"
+    "quicksync|qsvh264enc|NV12"
+    "vaapi|vaapih264enc|NV12"
+)
+
+# Production pipeline fragment for an encoder type (all emit compatible H.264).
+encoder_pipeline() {
+    case "$1" in
+        nvidia)
+            echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=$BITRATE"
+            ;;
+        va)
+            echo "videoconvert ! video/x-raw,format=NV12 ! vah264enc bitrate=$BITRATE"
+            ;;
+        quicksync)
+            echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=$BITRATE"
+            ;;
+        vaapi)
+            echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc bitrate=$BITRATE"
+            ;;
+        *)
+            # Software floor - always available, universally compatible
+            echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
+            ;;
+    esac
+}
+
+# Pick the first candidate that is installed AND actually encodes on this box.
+detect_encoder() {
+    local entry etype elem fmt
+    for entry in "${ENCODERS[@]}"; do
+        IFS='|' read -r etype elem fmt <<<"$entry"
+        gst-inspect-1.0 "$elem" >/dev/null 2>&1 || continue
+        echo "  Testing $etype ($elem)..." >&2
+        # 5s budget: hardware encoders can take ~2s to cold-init the GPU
+        if timeout 5 gst-launch-1.0 videotestsrc num-buffers=10 ! videoconvert ! \
+            "video/x-raw,format=$fmt" ! "$elem" ! fakesink >/dev/null 2>&1; then
+            echo "  [OK] $etype available" >&2
+            echo "$etype"
+            return
+        fi
+        echo "  [--] $etype present but no working hardware" >&2
+    done
+    echo "  [OK] software (CPU)" >&2
+    echo "software"
+}
+
 echo "Detecting hardware encoders..."
-ENCODER_TYPE=""
-
-# Test NVIDIA (priority 1)
-if gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
-    echo "  Testing NVIDIA encoder..."
-    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! \
-        video/x-raw,format=I420 ! nvh264enc ! fakesink 2>/dev/null; then
-        ENCODER_TYPE="nvidia"
-        echo "  [OK] NVIDIA available"
-    else
-        echo "  [--] NVIDIA plugin exists but no hardware"
-    fi
-fi
-
-# Test QuickSync (priority 2)
-if [ -z "$ENCODER_TYPE" ] && gst-inspect-1.0 qsvh264enc >/dev/null 2>&1; then
-    echo "  Testing QuickSync encoder..."
-    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! \
-        video/x-raw,format=NV12 ! qsvh264enc ! fakesink 2>/dev/null; then
-        ENCODER_TYPE="quicksync"
-        echo "  [OK] QuickSync available"
-    else
-        echo "  [--] QuickSync plugin exists but no hardware"
-    fi
-fi
-
-# Test VA-API (priority 3)
-if [ -z "$ENCODER_TYPE" ] && gst-inspect-1.0 vaapih264enc >/dev/null 2>&1; then
-    echo "  Testing VA-API encoder..."
-    if timeout 2 gst-launch-1.0 videotestsrc num-buffers=1 ! \
-        video/x-raw,format=NV12 ! vaapih264enc ! fakesink 2>/dev/null; then
-        ENCODER_TYPE="vaapi"
-        echo "  [OK] VA-API available"
-    else
-        echo "  [--] VA-API plugin exists but no hardware"
-    fi
-fi
-
-# Software fallback (priority 4 - always available)
-if [ -z "$ENCODER_TYPE" ]; then
-    ENCODER_TYPE="software"
-    echo "  [OK] Software encoder (CPU)"
-fi
-
+ENCODER_TYPE=$(detect_encoder)
 echo ""
 echo "Selected: $ENCODER_TYPE encoder"
 echo ""
-
-# Universal encoder function - produces compatible H.264 for ANY decoder
-build_encoder_pipeline() {
-    local use_hw="$1"
-
-    if [ "$use_hw" = "true" ]; then
-        case "$ENCODER_TYPE" in
-            nvidia)
-                # NVIDIA: I420 format for compatibility
-                echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=$BITRATE"
-                ;;
-            quicksync)
-                # QuickSync: NV12 format
-                echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=$BITRATE"
-                ;;
-            vaapi)
-                # VA-API: NV12 format, force compatible profile
-                if gst-inspect-1.0 vaapipostproc >/dev/null 2>&1; then
-                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapipostproc ! vaapih264enc rate-control=cbr bitrate=$BITRATE ! video/x-h264,profile=constrained-baseline"
-                else
-                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc rate-control=cbr bitrate=$BITRATE ! video/x-h264,profile=constrained-baseline"
-                fi
-                ;;
-            software)
-                # Software: I420 format produces baseline/main profile (universal compatibility)
-                echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
-                ;;
-        esac
-    else
-        # Software fallback - guaranteed to work
-        echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
-    fi
-}
 
 # Handle different sources
 if [ "$SOURCE_CHOICE" -eq 1 ]; then
@@ -176,7 +151,7 @@ if [ "$SOURCE_CHOICE" -eq 1 ]; then
     echo ""
 
     # Try hardware encoder first
-    ENCODER_PIPELINE=$(build_encoder_pipeline "true")
+    ENCODER_PIPELINE=$(encoder_pipeline "$ENCODER_TYPE")
 
     # shellcheck disable=SC2086
     gst-launch-1.0 -v \
@@ -197,7 +172,7 @@ if [ "$SOURCE_CHOICE" -eq 1 ]; then
         echo ""
 
         # Software fallback - guaranteed to work
-        ENCODER_PIPELINE=$(build_encoder_pipeline "false")
+        ENCODER_PIPELINE=$(encoder_pipeline software)
 
         # shellcheck disable=SC2086
         gst-launch-1.0 -v \
@@ -225,7 +200,7 @@ elif [ "$SOURCE_CHOICE" -eq 2 ]; then
     echo ""
 
     # decodebin handles any container/codec; then re-encode to compatible H.264
-    ENCODER_PIPELINE=$(build_encoder_pipeline "true")
+    ENCODER_PIPELINE=$(encoder_pipeline "$ENCODER_TYPE")
 
     # shellcheck disable=SC2086
     gst-launch-1.0 -v \
@@ -243,7 +218,7 @@ else
     echo ""
 
     # Try hardware encoder first
-    ENCODER_PIPELINE=$(build_encoder_pipeline "true")
+    ENCODER_PIPELINE=$(encoder_pipeline "$ENCODER_TYPE")
 
     # shellcheck disable=SC2086
     gst-launch-1.0 -v \
@@ -264,7 +239,7 @@ else
         echo ""
 
         # Software fallback - guaranteed to work
-        ENCODER_PIPELINE=$(build_encoder_pipeline "false")
+        ENCODER_PIPELINE=$(encoder_pipeline software)
 
         # shellcheck disable=SC2086
         gst-launch-1.0 -v \

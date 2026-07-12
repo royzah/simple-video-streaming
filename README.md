@@ -51,17 +51,25 @@ Enter the receiver's IP and choose a source (1 = camera, 3 = test pattern).
 
 1. `setup.sh` installs GStreamer and opens UDP port 5004.
 2. `stream.sh` asks for the destination IP, detects an encoder, and sends video.
-3. `view.sh` detects a decoder, receives the stream, and shows a window.
+3. `view.sh` receives the stream and displays it; `decodebin` selects the
+   decoder.
 
 ## Encoder detection
 
-The scripts pick the best available encoder and fall back to software if the
-hardware path fails:
+`stream.sh` picks the first encoder that is installed and actually works on the
+machine, and falls back to software otherwise:
 
 - NVIDIA GPU - `nvh264enc`
+- Intel/AMD GPU (VA plugin) - `vah264enc`
 - Intel GPU (QuickSync) - `qsvh264enc`
-- Intel/AMD GPU (VA-API) - `vaapih264enc`
+- Intel/AMD GPU (legacy VA-API) - `vaapih264enc`
 - No GPU - `x264enc` (software, higher CPU)
+
+## Decoder selection
+
+`view.sh` does not detect decoders by hand. `decodebin` auto-plugs the best
+available decoder (NVIDIA, VA, VA-API) and, if a hardware decoder rejects a
+stream or is unavailable, retries down to software (`avdec_h264`) on its own.
 
 The camera and test-pattern sources are always re-encoded to H.264. A video
 file is decoded with `decodebin` and re-encoded too, so any container or codec
