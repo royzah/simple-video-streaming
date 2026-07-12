@@ -13,7 +13,6 @@ software fallback.
 ## Install
 
 ```bash
-chmod +x setup.sh
 sudo ./setup.sh
 ```
 
@@ -21,11 +20,9 @@ sudo ./setup.sh
 
 ```bash
 # Terminal 1
-chmod +x view.sh
 ./view.sh
 
 # Terminal 2
-chmod +x stream.sh
 ./stream.sh
 ```
 
@@ -62,8 +59,24 @@ The scripts pick the best available encoder and fall back to software if the
 hardware path fails:
 
 - NVIDIA GPU - `nvh264enc`
-- Intel/AMD GPU - `vaapih264enc`
+- Intel GPU (QuickSync) - `qsvh264enc`
+- Intel/AMD GPU (VA-API) - `vaapih264enc`
 - No GPU - `x264enc` (software, higher CPU)
+
+The camera and test-pattern sources are always re-encoded to H.264. A video
+file is decoded with `decodebin` and re-encoded too, so any container or codec
+(MP4, MKV, AVI, HEVC, ...) works.
+
+## Configuration
+
+Override defaults with environment variables:
+
+```bash
+PORT=6000 ./view.sh              # listen on a different port
+PORT=6000 ./stream.sh            # must match the viewer
+LATENCY=100 ./view.sh            # jitter buffer in ms (default 50)
+BITRATE=6000 ./stream.sh         # encode bitrate in kbps (default 3000)
+```
 
 ## Troubleshooting
 

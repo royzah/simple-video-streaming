@@ -2,7 +2,8 @@
 # Bulletproof Video Streamer - Works on ANY laptop
 # Automatically adapts to NVIDIA, VA-API, QuickSync, or software encoding
 
-PORT=5004
+PORT=${PORT:-5004}
+BITRATE=${BITRATE:-3000}
 
 echo "=== Video Streamer ==="
 echo ""
@@ -98,28 +99,28 @@ build_encoder_pipeline() {
         case "$ENCODER_TYPE" in
             nvidia)
                 # NVIDIA: I420 format for compatibility
-                echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=3000"
+                echo "videoconvert ! video/x-raw,format=I420 ! nvh264enc preset=low-latency-hq bitrate=$BITRATE"
                 ;;
             quicksync)
                 # QuickSync: NV12 format
-                echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=3000"
+                echo "videoconvert ! video/x-raw,format=NV12 ! qsvh264enc bitrate=$BITRATE"
                 ;;
             vaapi)
                 # VA-API: NV12 format, force compatible profile
                 if gst-inspect-1.0 vaapipostproc >/dev/null 2>&1; then
-                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapipostproc ! vaapih264enc rate-control=cbr bitrate=3000 ! video/x-h264,profile=constrained-baseline"
+                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapipostproc ! vaapih264enc rate-control=cbr bitrate=$BITRATE ! video/x-h264,profile=constrained-baseline"
                 else
-                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc rate-control=cbr bitrate=3000 ! video/x-h264,profile=constrained-baseline"
+                    echo "videoconvert ! video/x-raw,format=NV12 ! vaapih264enc rate-control=cbr bitrate=$BITRATE ! video/x-h264,profile=constrained-baseline"
                 fi
                 ;;
             software)
                 # Software: I420 format produces baseline/main profile (universal compatibility)
-                echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast"
+                echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
                 ;;
         esac
     else
         # Software fallback - guaranteed to work
-        echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=3000 speed-preset=ultrafast"
+        echo "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=$BITRATE speed-preset=ultrafast"
     fi
 }
 
@@ -219,14 +220,18 @@ elif [ "$SOURCE_CHOICE" -eq 2 ]; then
     fi
 
     echo ""
-    echo "Streaming video file..."
+    echo "Streaming video file (re-encoding for compatibility)..."
     echo "Press Ctrl+C to stop"
     echo ""
 
-    # Files are already encoded, just stream them
+    # decodebin handles any container/codec; then re-encode to compatible H.264
+    ENCODER_PIPELINE=$(build_encoder_pipeline "true")
+
+    # shellcheck disable=SC2086
     gst-launch-1.0 -v \
         filesrc location="$VIDEO_FILE" ! \
-        qtdemux ! \
+        decodebin ! \
+        $ENCODER_PIPELINE ! \
         h264parse ! \
         rtph264pay config-interval=1 pt=96 ! \
         udpsink host="$DEST_IP" port=$PORT

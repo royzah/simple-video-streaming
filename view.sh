@@ -2,8 +2,8 @@
 # Bulletproof Video Viewer - Works with ANY encoder
 # Automatically adapts to NVIDIA, VA-API, QuickSync, or software decoding
 
-PORT=5004
-LATENCY=50
+PORT=${PORT:-5004}
+LATENCY=${LATENCY:-50}
 
 echo "=== Video Viewer ==="
 echo ""
@@ -84,8 +84,8 @@ echo ""
 
 # Try hardware decoder first
 gst-launch-1.0 -v \
-    udpsrc port=$PORT caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! \
-    rtpjitterbuffer latency=$LATENCY drop-on-latency=true ! \
+    udpsrc port="$PORT" caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! \
+    rtpjitterbuffer latency="$LATENCY" drop-on-latency=true ! \
     rtph264depay ! \
     h264parse ! \
     "$DECODER" ! \
@@ -118,8 +118,8 @@ if ! kill -0 $VIEWER_PID 2>/dev/null; then
 
     # Software decoder fallback - handles ALL profiles including high-4:4:4
     gst-launch-1.0 -v \
-        udpsrc port=$PORT caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! \
-        rtpjitterbuffer latency=$LATENCY drop-on-latency=true ! \
+        udpsrc port="$PORT" caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! \
+        rtpjitterbuffer latency="$LATENCY" drop-on-latency=true ! \
         rtph264depay ! \
         h264parse ! \
         avdec_h264 ! \
@@ -136,7 +136,7 @@ if ! kill -0 $VIEWER_PID 2>/dev/null; then
         echo ""
 
         gst-launch-1.0 -v \
-            udpsrc port=$PORT ! \
+            udpsrc port="$PORT" ! \
             application/x-rtp ! \
             rtpjitterbuffer ! \
             rtph264depay ! \

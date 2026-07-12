@@ -87,6 +87,9 @@ echo "Available encoders:"
 if gst-inspect-1.0 nvh264enc >/dev/null 2>&1; then
     echo "  - NVIDIA hardware"
 fi
+if gst-inspect-1.0 qsvh264enc >/dev/null 2>&1; then
+    echo "  - QuickSync hardware"
+fi
 if gst-inspect-1.0 vaapih264enc >/dev/null 2>&1; then
     echo "  - VA-API hardware"
 fi
@@ -105,14 +108,11 @@ echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Make scripts executable:"
-echo "     chmod +x stream.sh view.sh"
-echo ""
-echo "  2. For local testing (one laptop):"
+echo "  1. Local testing (one machine):"
 echo "     Terminal 1: ./view.sh"
 echo "     Terminal 2: ./stream.sh (press Enter for localhost)"
 echo ""
-echo "  3. For remote streaming (two laptops):"
-echo "     Laptop A: ./view.sh"
-echo "     Laptop B: ./stream.sh (enter Laptop A's IP)"
+echo "  2. Remote streaming (two machines):"
+echo "     Receiver: ./view.sh"
+echo "     Sender:   ./stream.sh (enter the receiver's IP)"
 echo ""
