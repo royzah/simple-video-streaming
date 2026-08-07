@@ -45,7 +45,39 @@ On the sender:
 ./stream.sh
 ```
 
-Enter the receiver's IP and choose a source (1 = camera, 3 = test pattern).
+Enter the receiver's IP and choose a source (1 = camera, 3 = test pattern,
+4 = IP camera over RTSP).
+
+## IP camera (RTSP)
+
+Choose source 4 and give the camera's URL. The camera already sends H.264 or
+H.265, so the stream is **relayed unchanged**: nothing is decoded or encoded, no
+GPU is touched, and it runs on a board with no hardware encoder at all.
+
+```bash
+CODEC=h264 ./stream.sh        # must match what the camera sends
+TRANSCODE=1 ./stream.sh       # only if you need to change codec or bitrate
+```
+
+RTSP is pulled over TCP so the whole session stays on the camera's port instead
+of spraying RTP across UDP ports a firewall has not opened.
+
+## On a TII saluki
+
+The saluki image ships no GStreamer, and app code does not belong in its rootfs,
+so **run this in a container**. The board is an Orin NX: for the hardware encoder
+the container needs GStreamer plus NVIDIA's `nvv4l2` plugins, which in practice
+means an L4T base image matching the host, started with `--runtime nvidia` so
+`nvidia-container-toolkit` injects the Tegra libraries and device nodes. A plain
+distro image will run, and will encode on the CPU.
+
+For the IP-camera relay above, none of that applies: no encoder is used, so any
+image with GStreamer will do.
+
+The board's camera lane has no DHCP, so give the camera a static address on that
+lane. A lane reaches the mission computer only, never the fabric, so the saluki
+pulls from the camera and re-publishes to the laptop; the camera never talks to
+the laptop directly.
 
 ## How it works
 
@@ -76,7 +108,8 @@ down to software on its own.
 
 The camera and test-pattern sources are always re-encoded. A video file is
 decoded with `decodebin` and re-encoded too, so any container or codec (MP4,
-MKV, AVI, HEVC, ...) works.
+MKV, AVI, HEVC, ...) works. An RTSP source is relayed as-is unless
+`TRANSCODE=1`.
 
 ## Configuration
 
@@ -89,6 +122,7 @@ LATENCY=100 ./view.sh            # jitter buffer in ms (default 50)
 BITRATE=6000 ./stream.sh         # encode bitrate in kbps (default 3000)
 CODEC=h265 ./view.sh             # H.265/HEVC instead of H.264
 CODEC=h265 ./stream.sh           # both ends must use the same codec
+TRANSCODE=1 ./stream.sh          # re-encode an RTSP source instead of relaying
 ```
 
 `CODEC` defaults to `h264` (widest interop). `h265` gives better compression at
@@ -117,6 +151,12 @@ Camera not found:
 ```bash
 ls /dev/video*   # confirm the camera exists, or use the test pattern
 ```
+
+An IP camera is never a `/dev/video*` device; use source 4 with its RTSP URL.
+
+RTSP source connects but no video: the camera's codec does not match `CODEC`.
+Relaying cannot convert it, so set `CODEC` to what the camera sends or use
+`TRANSCODE=1`.
 
 Cannot reach the remote IP:
 

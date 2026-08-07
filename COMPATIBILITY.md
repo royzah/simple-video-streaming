@@ -23,6 +23,22 @@ match. Everything below applies to both codecs (element names swap 264 for 265).
 3. On a hardware decode failure (for example an unsupported profile) it retries
    the next candidate on its own, down to software.
 
+## RTSP relay
+
+An IP camera source (`stream.sh` option 4) bypasses this entirely. The camera
+already emits H.264/H.265, so the stream is depayloaded and repayloaded without
+decoding, no encoder is selected, and the probe above is skipped. It therefore
+works on any board with GStreamer, hardware codec or not. `TRANSCODE=1` opts
+back into the table below.
+
+## Containers
+
+Hardware encoding inside a container needs the host's codec userspace, which is
+injected at runtime rather than shipped in the image, so the container base has
+to match the host. On Jetson/Orin that means an L4T image matching the host L4T
+and `--runtime nvidia` (nvidia-container-toolkit); a plain distro image encodes
+on the CPU. A relay needs none of this.
+
 ## Encoder/decoder matrix
 
 Rows are the streamer's encoder, columns are the decoder `decodebin` selects on

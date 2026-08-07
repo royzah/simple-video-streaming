@@ -52,6 +52,7 @@ echo "Select video source:"
 echo "  [1] Camera"
 echo "  [2] Video file"
 echo "  [3] Test pattern"
+echo "  [4] IP camera (RTSP)"
 read -rp "Choice [3]: " SOURCE_CHOICE
 SOURCE_CHOICE=${SOURCE_CHOICE:-3}
 
@@ -126,11 +127,18 @@ detect_encoder() {
     echo "software"
 }
 
-echo "Detecting hardware encoders..."
-ENCODER_TYPE=$(detect_encoder)
-echo ""
-echo "Selected: $ENCODER_TYPE encoder"
-echo ""
+# An RTSP relay re-encodes nothing, so skip the probe entirely.
+if [ "$SOURCE_CHOICE" -eq 4 ] && [ "${TRANSCODE:-0}" != "1" ]; then
+    ENCODER_TYPE=none
+    echo "Relaying: no encoder needed"
+    echo ""
+else
+    echo "Detecting hardware encoders..."
+    ENCODER_TYPE=$(detect_encoder)
+    echo ""
+    echo "Selected: $ENCODER_TYPE encoder"
+    echo ""
+fi
 
 # Handle different sources
 if [ "$SOURCE_CHOICE" -eq 1 ]; then
@@ -243,6 +251,50 @@ elif [ "$SOURCE_CHOICE" -eq 2 ]; then
         $PARSE ! \
         $PAY ! \
         udpsink host="$DEST_IP" port=$PORT
+
+elif [ "$SOURCE_CHOICE" -eq 4 ]; then
+    # === IP CAMERA (RTSP) ===
+    # An IP camera already sends H.264/H.265, so the default relays it and never
+    # touches an encoder. Nothing is decoded, so this needs no GPU and runs on a
+    # board with no hardware encoder at all.
+    read -rp "RTSP URL (rtsp://host:8554/path): " RTSP_URL
+    if [ -z "$RTSP_URL" ]; then
+        echo "ERROR: no URL"
+        exit 1
+    fi
+    # TCP keeps the whole session on the RTSP port instead of spraying RTP over
+    # UDP ports a firewall has not opened.
+    RTSP_SRC="rtspsrc location=$RTSP_URL latency=${LATENCY:-200} protocols=tcp"
+
+    if [ "${TRANSCODE:-0}" = "1" ]; then
+        echo ""
+        echo "Transcoding to $CODEC at ${BITRATE}kbps..."
+        echo "Press Ctrl+C to stop"
+        echo ""
+        ENCODER_PIPELINE=$(encoder_pipeline "$ENCODER_TYPE")
+
+        # shellcheck disable=SC2086
+        gst-launch-1.0 -v \
+            $RTSP_SRC ! \
+            decodebin ! \
+            $ENCODER_PIPELINE ! \
+            $PARSE ! \
+            $PAY ! \
+            udpsink host="$DEST_IP" port=$PORT
+    else
+        echo ""
+        echo "Relaying $CODEC without re-encoding. Set CODEC to match the camera."
+        echo "Press Ctrl+C to stop"
+        echo ""
+
+        # shellcheck disable=SC2086
+        gst-launch-1.0 -v \
+            $RTSP_SRC ! \
+            rtph${HNUM}depay ! \
+            $PARSE ! \
+            $PAY ! \
+            udpsink host="$DEST_IP" port=$PORT
+    fi
 
 else
     # === TEST PATTERN ===
