@@ -62,17 +62,62 @@ TRANSCODE=1 ./stream.sh       # only if you need to change codec or bitrate
 RTSP is pulled over TCP so the whole session stays on the camera's port instead
 of spraying RTP across UDP ports a firewall has not opened.
 
+## Container
+
+Built for `amd64` and `arm64` and published to
+`ghcr.io/royzah/simple-video-streaming`. Every prompt is skipped when its
+variable is set, so the same scripts run unattended:
+
+| Variable     | Replaces the prompt for            |
+| ------------ | ---------------------------------- |
+| `DEST_IP`    | destination IP                     |
+| `SOURCE`     | `camera`, `file`, `test`, `rtsp`   |
+| `CAMERA`     | which `/dev/video*` to use         |
+| `VIDEO_FILE` | file path                          |
+| `RTSP_URL`   | IP camera URL                      |
+
+Leave one unset and it still asks, so nothing changes outside a container.
+
+```bash
+IMAGE=ghcr.io/royzah/simple-video-streaming:latest
+
+# viewer: needs an X display
+docker run --rm --network host -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:ro $IMAGE /app/view.sh
+
+# streamer: USB webcam
+docker run --rm --network host --device /dev/video0 \
+  -e DEST_IP=<viewer ip> -e SOURCE=camera -e CAMERA=/dev/video0 \
+  $IMAGE /app/stream.sh
+
+# streamer: IP camera, relayed without re-encoding
+docker run --rm --network host \
+  -e DEST_IP=<viewer ip> -e SOURCE=rtsp -e RTSP_URL=rtsp://<cam>/stream \
+  $IMAGE /app/stream.sh
+```
+
+`--network host` keeps RTP on the host's own address. On a bridge, give the
+viewer's container IP as `DEST_IP` and the sender needs no published port.
+
 ## On a TII saluki
 
 The saluki image ships no GStreamer, and app code does not belong in its rootfs,
-so **run this in a container**. The board is an Orin NX: for the hardware encoder
-the container needs GStreamer plus NVIDIA's `nvv4l2` plugins, which in practice
-means an L4T base image matching the host, started with `--runtime nvidia` so
-`nvidia-container-toolkit` injects the Tegra libraries and device nodes. A plain
-distro image will run, and will encode on the CPU.
+so **run the container above**, with `podman` rather than `docker`:
 
-For the IP-camera relay above, none of that applies: no encoder is used, so any
-image with GStreamer will do.
+```bash
+sudo podman run --rm --network host --device /dev/video0 \
+  -e DEST_IP=<laptop address> -e SOURCE=camera -e CAMERA=/dev/video0 \
+  ghcr.io/royzah/simple-video-streaming:latest /app/stream.sh
+```
+
+The board is an Orin NX. **The hardware encoder is not used here**: a webcam is
+re-encoded on the CPU, and an IP camera is relayed untouched. Reaching
+`nvv4l2h264enc` would need an L4T base image matching the host and
+`--runtime nvidia`, which this image deliberately does not carry.
+
+The saluki reaches its LAN through the net-vm guest, which routes and
+masquerades for it, so the container pulls a camera on that LAN with no extra
+configuration.
 
 The board's camera lane has no DHCP, so give the camera a static address on that
 lane. A lane reaches the mission computer only, never the fabric, so the saluki
