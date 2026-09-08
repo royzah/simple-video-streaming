@@ -46,3 +46,27 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - id: meta-l4t
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            suffix=-l4t,onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Jetson only: the toolkit injects the host's NVIDIA plugins, and they are
+      # arm64 binaries built for one GStreamer.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.l4t
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta-l4t.outputs.tags }}
+          labels: ${{ steps.meta-l4t.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

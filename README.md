@@ -110,10 +110,23 @@ sudo podman run --rm --network host --device /dev/video0 \
   ghcr.io/royzah/simple-video-streaming:latest /app/stream.sh
 ```
 
-The board is an Orin NX. **The hardware encoder is not used here**: a webcam is
-re-encoded on the CPU, and an IP camera is relayed untouched. Reaching
-`nvv4l2h264enc` would need an L4T base image matching the host and
-`--runtime nvidia`, which this image deliberately does not carry.
+The board is an Orin NX, so its encoder is `nvv4l2h264enc`, not `nvh264enc`.
+The default image above encodes on the CPU, which is ample for 720p30 and needs
+nothing from the host.
+
+For the hardware encoder use the `-l4t` tag and `--runtime nvidia`. **The
+NVIDIA plugins are not in that image**: `nvidia-container-toolkit` injects them
+from the host, which is why it is built on Ubuntu 22.04 to match the GStreamer
+those plugins expect.
+
+```bash
+sudo podman run --rm --runtime nvidia --network host --device /dev/video0 \
+  -e DEST_IP=<laptop address> -e SOURCE=camera -e CAMERA=/dev/video0 \
+  ghcr.io/royzah/simple-video-streaming:latest-l4t /app/stream.sh
+```
+
+`stream.sh` finds `nvv4l2h264enc` on its own. An IP camera never needs this:
+it is relayed without touching an encoder.
 
 The saluki reaches its LAN through the net-vm guest, which routes and
 masquerades for it, so the container pulls a camera on that LAN with no extra
